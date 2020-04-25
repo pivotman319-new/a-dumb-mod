@@ -16,6 +16,23 @@
 // memdbgon must be the last include file in a .cpp file!!!
 #include "tier0/memdbgon.h"
 
+using namespace vgui;
+
+static CUtlVector< VideoPanel * > g_vecVideoPanels;
+
+// Thiis is a hack due to the fact that the user can type quit with the video panel up, but it's parented to the GameUI dll root panel, which is already gone so
+//  we would crash in the destructor
+void VGui_ClearVideoPanels()
+{
+	for ( int i = g_vecVideoPanels.Count() - 1; i >= 0; --i )
+	{
+		if ( g_vecVideoPanels[ i ] )
+		{
+			delete g_vecVideoPanels[ i ];
+		}
+	}
+	g_vecVideoPanels.RemoveAll();
+}
 
 VideoPanel::VideoPanel( unsigned int nXPos, unsigned int nYPos, unsigned int nHeight, unsigned int nWidth, bool allowAlternateMedia ) : 
 	BaseClass( NULL, "VideoPanel" ),
@@ -24,7 +41,7 @@ VideoPanel::VideoPanel( unsigned int nXPos, unsigned int nYPos, unsigned int nHe
 	m_nPlaybackHeight( 0 ),
 	m_bAllowAlternateMedia( allowAlternateMedia )
 {
-	vgui::VPANEL pParent = enginevgui->GetPanel( PANEL_GAMEUIDLL );
+	vgui::VPANEL pParent = enginevgui->GetPanel( PANEL_ROOT );
 	SetParent( pParent );
 	SetVisible( false );
 	
@@ -71,6 +88,9 @@ VideoPanel::~VideoPanel( void )
 //-----------------------------------------------------------------------------
 bool VideoPanel::BeginPlayback( const char *pFilename )
 {
+	if ( !pFilename || pFilename[ 0 ] == '\0' )
+		return false;
+
 	// Who the heck hacked this in?
 #ifdef _X360
 	XVIDEO_MODE videoMode;
@@ -196,6 +216,17 @@ void VideoPanel::OnKeyCodePressed( vgui::KeyCode code )
 	{
 		BaseClass::OnKeyCodePressed( code );
 	}
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: 
+//-----------------------------------------------------------------------------
+void VideoPanel::StopPlayback(void)
+{
+	SetVisible(false);
+
+	// Start the deferred shutdown process
+	m_nShutdownCount = 1;
 }
 
 //-----------------------------------------------------------------------------
@@ -395,10 +426,45 @@ CON_COMMAND( playvideo, "Plays a video: <filename> [width height]" )
 }
 
 //-----------------------------------------------------------------------------
+// Purpose: Video playback without interruption.
+//-----------------------------------------------------------------------------
+
+CON_COMMAND( playvideo_nointerrupt, "Plays a video without ability to skip. Usage: <filename> [width height]" )
+{
+	if ( args.ArgC() < 2 )
+		return;
+
+	unsigned int nScreenWidth = Q_atoi( args[2] );
+	unsigned int nScreenHeight = Q_atoi( args[3] );
+
+	char strFullpath[MAX_PATH];
+	Q_strncpy(strFullpath, "media/", MAX_PATH);	// Assume we must play out of the media directory
+	char strFilename[MAX_PATH];
+	Q_StripExtension(args[1], strFilename, MAX_PATH);
+	Q_strncat(strFullpath, args[1], MAX_PATH);
+
+	if (nScreenWidth == 0)
+	{
+		nScreenWidth = ScreenWidth();
+	}
+
+	if (nScreenHeight == 0)
+	{
+		nScreenHeight = ScreenHeight();
+	}
+
+	// Create the panel and go!
+	if (VideoPanel_Create(0, 0, nScreenWidth, nScreenHeight, strFullpath) == false)
+	{
+		Warning("Unable to play video: %s\n", strFullpath);
+	}
+}
+
+//-----------------------------------------------------------------------------
 // Purpose: Used to launch a video playback and fire a command on completion
 //-----------------------------------------------------------------------------
 
-CON_COMMAND( playvideo_exitcommand, "Plays a video and fires and exit command when it is stopped or finishes: <filename> <exit command>" )
+CON_COMMAND( playvideo_exitcommand, "Plays a video and fires and exit command when it is stopped or finishes. Usage: <filename> <exit command>" )
 {
 	if ( args.ArgC() < 2 )
 		return;
@@ -419,5 +485,45 @@ CON_COMMAND( playvideo_exitcommand, "Plays a video and fires and exit command wh
 	{
 		Warning( "Unable to play video: %s\n", strFullpath );
 		engine->ClientCmd( pExitCommand );
+	}
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: Used to launch a video playback and fire a command on completion.
+//-----------------------------------------------------------------------------
+
+CON_COMMAND( playvideo_exitcommand_nointerrupt, "Plays a video (without interruption) and fires and exit command when it is stopped or finishes. Usage: <filename> <exit command>" )
+{
+	if ( args.ArgC() < 2 )
+		return;
+
+	unsigned int nScreenWidth = ScreenWidth();
+	unsigned int nScreenHeight = ScreenHeight();
+
+	// Pull out the exit command we want to use
+	char *pExitCommand = Q_strstr( args.GetCommandString(), args[2] );
+	char strFullpath[MAX_PATH];
+	Q_strncpy(strFullpath, "media/", MAX_PATH);	// Assume we must play out of the media directory
+	char strFilename[MAX_PATH];
+	Q_StripExtension(args[1], strFilename, MAX_PATH);
+	Q_strncat(strFullpath, args[1], MAX_PATH);
+
+	// Create the panel and go!
+	if (VideoPanel_Create(0, 0, nScreenWidth, nScreenHeight, strFullpath, pExitCommand) == false)
+	{
+		Warning("Unable to play video: %s\n", strFullpath);
+		engine->ClientCmd(pExitCommand);
+	}
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: Cause all playback to stop
+//-----------------------------------------------------------------------------
+
+CON_COMMAND( stopvideos, "Stops all videos playing in the screen." )
+{
+	FOR_EACH_VEC( g_vecVideoPanels, itr )
+	{
+		g_vecVideoPanels[itr]->StopPlayback();
 	}
 }
